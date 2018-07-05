@@ -3,14 +3,15 @@
 Scripts to drive a donkey 2 car and train a model for it.
 
 Usage:
-    manage.py (drive) [--model=<model>] [--js] [--chaos]
-    manage.py (train) [--tub=<tub1,tub2,..tubn>]  (--model=<model>) [--base_model=<base_model>] [--no_cache]
+    manage.py (drive) [--model=<model>] [--js] [--chaos] [--gluon]
+    manage.py (train) [--tub=<tub1,tub2,..tubn>]  (--model=<model>) [--base_model=<base_model>] [--no_cache] [--gluon]
 
 Options:
     -h --help        Show this screen.
     --tub TUBPATHS   List of paths to tubs. Comma separated. Use quotes to use wildcards. ie "~/tubs/*"
     --js             Use physical joystick.
     --chaos          Add periodic random steering when manually driving
+    --gluon          Run with the gluon NN (if trained)
 """
 import os
 from docopt import docopt
@@ -18,6 +19,7 @@ from docopt import docopt
 import donkeycar as dk
 from donkeycar.parts.camera import PiCamera
 from donkeycar.parts.transform import Lambda
+from donkeycar.parts.gluon import GluonLinear
 from donkeycar.parts.keras import KerasLinear
 from donkeycar.parts.actuator import PCA9685, PWMSteering, PWMThrottle
 from donkeycar.parts.datastore import TubGroup, TubWriter
@@ -25,7 +27,7 @@ from controller import LocalWebController, JoystickController
 from donkeycar.parts.clock import Timestamp
 
 
-def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
+def drive(cfg, model_path=None, use_joystick=False, use_chaos=False, gluon = False):
     """
     Construct a working robotic vehicle from many parts.
     Each part runs as a job in the Vehicle loop, calling either
@@ -72,7 +74,7 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
           outputs=['run_pilot'])
 
     # Run the pilot if the mode is not user.
-    kl = KerasLinear()
+    kl = GluonLinear() if gluon else KerasLinear()
     if model_path:
         kl.load(model_path)
 
@@ -131,7 +133,7 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
             max_loop_count=cfg.MAX_LOOPS)
 
 
-def train(cfg, tub_names, new_model_path, base_model_path=None):
+def train(cfg, tub_names, new_model_path, base_model_path=None, gluon=False):
     """
     use the specified data in tub_names to train an artifical neural network
     saves the output trained model as model_name
@@ -141,7 +143,8 @@ def train(cfg, tub_names, new_model_path, base_model_path=None):
 
     new_model_path = os.path.expanduser(new_model_path)
 
-    kl = KerasLinear()
+    kl = GluonLinear() if gluon else KerasLinear()
+
     if base_model_path is not None:
         base_model_path = os.path.expanduser(base_model_path)
         kl.load(base_model_path)
@@ -173,14 +176,15 @@ if __name__ == '__main__':
     cfg = dk.load_config()
 
     if args['drive']:
-        drive(cfg, model_path=args['--model'], use_joystick=args['--js'], use_chaos=args['--chaos'])
+        drive(cfg, model_path=args['--model'], use_joystick=args['--js'], use_chaos=args['--chaos'], gluon = args['--gluon'])
 
     elif args['train']:
         tub = args['--tub']
         new_model_path = args['--model']
         base_model_path = args['--base_model']
         cache = not args['--no_cache']
-        train(cfg, tub, new_model_path, base_model_path)
+        gluon = args['--gluon']
+        train(cfg, tub, new_model_path, base_model_path, gluon)
 
 
 
