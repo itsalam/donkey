@@ -8,7 +8,7 @@ import numpy as np
 
 import re
 
-from datetime import datetime
+import time
 
 class GluonPilot:
 
@@ -22,6 +22,9 @@ class GluonPilot:
             p, folder_name = os.path.split(path)
             path += '/' + folder_name + '-0000.params'
             self.net.load_params(path, self.ctx)
+            print('Sucessfully loaded ', folder_name)
+        else:
+            print('Folder not found.')
 
     def save(self, path):
         while os.path.exists(path):
@@ -66,7 +69,7 @@ class GluonPilot:
 
         return angle_output, throttle_output
 
-    def train(self, train_gen, val_gen, saved_model_path, epochs= 100, steps=100, train_split=0.8):
+    def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
 
         self.load(saved_model_path)
 
@@ -118,13 +121,12 @@ class GluonLinear(GluonPilot):
         self.run_count = 0
 
     def run(self, img_arr):
-        start = datetime.now()
+        start = time.time()
         img_arr = img_arr.reshape((1,) + img_arr.shape)
         angle_binned, throttle = self.predict(img_arr)
         # print('throttle', throttle)
         # angle_certainty = max(angle_binned[0])
-        angle_unbinned = dk.utils.linear_unbin(angle_binned.asnumpy())
-        self.elapsed += datetime.datetime.now() - start
+        self.elapsed += time.time() - start
         self.run_count += 1
         if self.run_count % 100 == 99:
             print(self.elapsed / self.run_count)
