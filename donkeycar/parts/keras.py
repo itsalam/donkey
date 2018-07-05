@@ -12,6 +12,7 @@ from tensorflow.python.keras.layers import Convolution2D
 from tensorflow.python.keras.layers import Dropout, Flatten, Dense
 from tensorflow.python.keras.callbacks import ModelCheckpoint, EarlyStopping
 
+from datetime import datetime
 
 class KerasPilot:
 
@@ -68,13 +69,20 @@ class KerasLinear(KerasPilot):
             self.model = default_linear()
         else:
             self.model = default_linear()
+        self.elapsed = 0.0
+        self.run_count = 0
 
     def run(self, img_arr):
+        start = datetime.now()
         img_arr = img_arr.reshape((1,) + img_arr.shape)
         outputs = self.model.predict(img_arr)
         # print(len(outputs), outputs)
         steering = outputs[0]
         throttle = outputs[1]
+        self.elapsed += datetime.datetime.now() - start
+        self.run_count += 1
+        if self.run_count % 100 == 99:
+            print(self.elapsed / self.run_count)
         return steering[0][0], throttle[0][0]
 
 

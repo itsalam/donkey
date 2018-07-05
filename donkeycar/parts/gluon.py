@@ -8,6 +8,7 @@ import numpy as np
 
 import re
 
+from datetime import datetime
 
 class GluonPilot:
 
@@ -45,7 +46,7 @@ class GluonPilot:
 
     def compile_model(self, loss=None, optimizer='sgd', learning_rate=1e-3, init_magnitude=2.24):
         self.net.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
-        self.loss = gluon.loss.SoftmaxCrossEntropyLoss() if loss is None else loss
+        self.loss = gluon.loss.L2Loss() if loss is None else loss
         self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer, {'learning_rate': learning_rate})
 
     def evalulate_accuracy(self, data_iterator):
@@ -54,8 +55,7 @@ class GluonPilot:
             data = data.as_in_context(self.ctx)
             label = label.as_in_context(self.ctx)
             output = self.net(data)
-            predictions = nd.argmax(output, 1)
-            acc.update(predictions, label)
+            acc.update(label, output)
         return acc.get()[1]
 
     def predict(self, img_arr):
@@ -68,7 +68,6 @@ class GluonPilot:
 
     def train(self, train_gen, val_gen, saved_model_path, epochs= 100, steps=100, train_split=0.8):
 
-        self.compile_model()
         self.load(saved_model_path)
 
         test_steps = int(round(steps * (1.0 - train_split)))
@@ -98,8 +97,8 @@ class GluonPilot:
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
             test_accuracy = self.evalulate_accuracy(test_dataload)
             train_accuracy = self.evalulate_accuracy(train_dataload)
-            print("Epoch %s. Loss: %s, Train_acc %s, Test_acc %s Batch_# %s" % (
-                epoch_index, moving_loss, train_accuracy, test_accuracy, i))
+            print("Epoch %s. Loss: %s, Train_acc %s, Test_acc %s" % (
+                epoch_index, moving_loss, train_accuracy, test_accuracy))
             if old_loss < moving_loss:
                 break
             old_loss = moving_loss
@@ -107,54 +106,48 @@ class GluonPilot:
         self.save(saved_model_path)
 
 
-class GluonCategorical(GluonPilot):
+class GluonLinear(GluonPilot):
     def __init__(self, net=None):
-        super(GluonCategorical, self).__init__()
+        super(GluonLinear, self).__init__()
         if net:
             self.net = net
         else:
-            self.net = default_categorical()
+            self.net = default_linear()
+        self.compile_model()
+        self.elapsed = 0.0
+        self.run_count = 0
 
     def run(self, img_arr):
+        start = datetime.now()
         img_arr = img_arr.reshape((1,) + img_arr.shape)
         angle_binned, throttle = self.predict(img_arr)
         # print('throttle', throttle)
         # angle_certainty = max(angle_binned[0])
         angle_unbinned = dk.utils.linear_unbin(angle_binned.asnumpy())
-        return angle_unbinned, throttle
+        self.elapsed += datetime.datetime.now() - start
+        self.run_count += 1
+        if self.run_count % 100 == 99:
+            print(self.elapsed / self.run_count)
+        return angle_binned, throttle
 
 
-def default_categorical():
+def default_linear():
     net = gluon.nn.HybridSequential(prefix='')
     with net.name_scope():
-        # 24 features, 5 pixel x 5 pixel kernel (convolution, feature) window, 2wx2h stride, relu activation
         net.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
-        # 32 features, 5px5p kernel window, 2wx2h stride, relu activatiion
         net.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
-        # 64 features, 5px5p kernel window, 2wx2h stride, relu
         net.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
-        # 64 features, 3px3p kernel window, 2wx2h stride, relu
         net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
-        # 64 features, 3px3p kernel window, 1wx1h stride, relu
         net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
 
-        # Possibly add MaxPooling (will make it less sensitive to position in image).  Camera angle fixed, so may not to be needed
+        net.add(gluon.nn.Flatten())
+        net.add(gluon.nn.Dense(100, activation='relu'))
+        net.add(gluon.nn.Dropout(.1))
+        net.add(gluon.nn.Dense(50, activation='relu'))
+        net.add(gluon.nn.Dropout(.1))
 
-        net.add(gluon.nn.Flatten())  # Flatten to 1D (Fully connected)
-        net.add(gluon.nn.Dense(100, activation='relu'))  # Classify the data into 100 features, make all negatives 0
-        net.add(gluon.nn.Dropout(.1))  # Randomly drop out (turn off) 10% of the neurons (Prevent overfitting)
-        net.add(gluon.nn.Dense(50, activation='relu'))  # Classify the data into 50 features, make all negatives 0
-        net.add(gluon.nn.Dropout(.1))  # Randomly drop out (turn off) 10% of the neurons (Prevent overfitting)
-
-        # categorical output of the angle
-
-        # Connect every input with every output and output 15 hidden units. Use Softmax to give percentage. 15 categories and find best one based off percentage 0.0-1.0
-        angle_out = gluon.nn.Dense(15)
-
-        # continous output of throttle
-        # throttle_out = gluon.nn.Dense(1, activation='relu')  # Reduce to 1 number, Positive number only
-
-        net.add(angle_out)
+        net.add(gluon.nn.Dense(2, activation="tanh")
+)
     net.hybridize()
     return net
 
@@ -163,18 +156,18 @@ def default_categorical():
 
 
 def transform_gen(data_gen, num_batches):
-    data_batches, label_batches = map(list, zip(*[(x[0], y[0]) for (x, y), i in zip(data_gen, range(num_batches))]))
+    data_batches, label_batches = map(list, zip(*[(x[0], (y[0], y[1])) for (x, y), i in zip(data_gen, range(num_batches))]))
 
     data_list = []
     label_list = []
 
     for data_batch, label_batch in zip(data_batches, label_batches):
         for data in data_batch:
-            data = np.swapaxes(data, 2, 0)
-            data = np.swapaxes(data, 1, 2)
+            data = np.transpose(data, axes= (2, 0, 1))
             data_list.append(data.astype('float32'))
-        for label in label_batch:
-            label_list.append(label)
+        for angle, throttle in zip(label_batch[0], label_batch[1]):
+            output = [angle , throttle]
+            label_list.append(np.array(output).astype('float32'))
 
     return data_list, label_list
 
@@ -189,7 +182,7 @@ class GluonDataset(gluon.data.Dataset):
         self.label = label
 
     def __getitem__(self, item):
-        return self.data[item], mx.nd.topk(mx.nd.array(self.label[item]))
+        return self.data[item], self.label[item]
 
     def __len__(self):
         return len(self.data)
