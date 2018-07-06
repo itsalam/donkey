@@ -64,10 +64,8 @@ class GluonPilot:
     def predict(self, img_arr):
         # adjust for default gluon CNN input
         input_arr = nd.array(img_arr, ctx=self.ctx).transpose(axes=(0, 3, 1, 2))
-        throttle_output = 0.0
-        angle_output = self.net(input_arr)
-
-        return angle_output, throttle_output
+        output = self.net(input_arr).asnumpy()
+        return output[0]
 
     def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
 
@@ -123,14 +121,14 @@ class GluonLinear(GluonPilot):
     def run(self, img_arr):
         start = time.time()
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        angle_binned, throttle = self.predict(img_arr)
+        output = self.predict(img_arr)
         # print('throttle', throttle)
         # angle_certainty = max(angle_binned[0])
         self.elapsed += time.time() - start
         self.run_count += 1
         if self.run_count % 100 == 99:
             print(self.elapsed / self.run_count)
-        return angle_binned, throttle
+        return output[0], output[1]
 
 
 def default_linear():
