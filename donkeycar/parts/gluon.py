@@ -1,18 +1,10 @@
+import os.path
+import re
+import time
+
 import mxnet as mx
 from mxnet import nd, autograd, gluon
 
-
-from donkeycar import util
-import os.path
-from os.path import isfile
-from os import listdir
-import json
-
-import numpy as np
-
-import re
-
-import time
 
 class GluonPilot:
 
@@ -56,11 +48,10 @@ class GluonPilot:
         self.loss = gluon.loss.L2Loss() if loss is None else loss
         self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer, {'learning_rate': learning_rate})
 
-    def evalulate_accuracy(self, data_iterator):
+    def evalulate_accuracy(self, data_iterator, steps):
         acc = mx.metric.Accuracy()
-        for i, (data, label) in enumerate(data_iterator):
-            data = data.as_in_context(self.ctx)
-            label = label.as_in_context(self.ctx)
+        for i, (data, label) in zip(range(steps), data_iterator):
+            data, label = self.format_gen_data(data, label)
             output = self.net(data)
             acc.update(output, label)
         return acc.get()[1]
@@ -69,17 +60,22 @@ class GluonPilot:
         output = self.net(img_arr).asnumpy()
         return output[0]
 
+    def format_gen_data(self, data, label):
+        data = nd.array(data).as_in_context(self.ctx)
+        data = data[0]
+        data = nd.transpose(data, axes=(0, 3, 1, 2))
+        label = nd.array([label[0], label[1]]).as_in_context(self.ctx)
+        label = label.swapaxes(0, 1)
+        return data, label
+
     def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
 
-        train_dataload = mx.gluon.data.DataLoader(train_gen, batch_size=128, shuffle=True)
-        test_dataload = mx.gluon.data.DataLoader(val_gen, batch_size=128)
-
+        train_steps = int(steps * (1.0 - train_split) / train_split)
         smoothing_constant = .01
         old_loss = float('Inf')
         for epoch_index in range(epochs):
-            for i, (data, label) in enumerate(train_dataload):
-                data = data.as_in_context(self.ctx)
-                label = label.as_in_context(self.ctx)
+            for steps, (data, label) in zip(range(steps), train_gen):
+                data, label = self.format_gen_data(data, label)
                 with autograd.record(train_mode=True):
                     output = self.net(data)
                     loss = self.loss(output, label)
@@ -88,10 +84,10 @@ class GluonPilot:
                 self.optimizer.step(data.shape[0])
 
                 current_loss = nd.mean(loss).asscalar()
-                moving_loss = (current_loss if ((i == 0) and (epoch_index == 0))
+                moving_loss = (current_loss if ((steps == 0) and (epoch_index == 0))
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
-            test_accuracy = self.evalulate_accuracy(test_dataload)
-            train_accuracy = self.evalulate_accuracy(train_dataload)
+            test_accuracy = self.evalulate_accuracy(train_gen, train_steps)
+            train_accuracy = self.evalulate_accuracy(val_gen, train_steps)
             print("Epoch %s. Loss: %s, Train_acc %s, Test_acc %s" % (
                 epoch_index, moving_loss, train_accuracy, test_accuracy))
             if old_loss < moving_loss:
@@ -144,50 +140,3 @@ def default_linear():
 
     net.hybridize()
     return net
-
-
-# Helper function to convert the generator of batches into a list
-
-def load_data_in_path(paths):
-    data_arr = []
-    label_arr = []
-    paths = util.files.expand_path_arg(paths)
-    for path in paths:
-        path += '/'
-        for file in listdir(path):
-            if 'record' in file:
-                with open(path + file) as data:
-                    json_data = json.load(data)
-                assert isfile(path + json_data['cam/image_array'])
-                image = mx.image.imread(path + json_data['cam/image_array'])
-                image = np.transpose(image, axes= (2, 0, 1))
-                data_arr.append(image.astype('float32'))
-                label_arr.append(np.array([json_data['user/angle'], json_data['user/throttle']]).astype('float32'))
-    return data_arr, label_arr
-
-# Helper Class to adjust the Donkey Car data generator to train the Gluon NN
-
-
-class GluonDataSet(gluon.data.Dataset):
-    def __init__(self, paths):
-        self.data, self.label = load_data_in_path(paths)
-
-    def __init__(self, data, label):
-        self.data = data
-        self.label = label
-
-    def __getitem__(self, item):
-        return self.data[item], self.label[item]
-
-    def __len__(self):
-        return len(self.data)
-
-    @staticmethod
-    def split_data(paths, split_ratio):
-        data, label = load_data_in_path(paths)
-        data_split_index = int(len(data) * split_ratio)
-        data_train = data[:data_split_index]
-        label_train = label[:data_split_index]
-        data_test = data[data_split_index:]
-        label_test = label[data_split_index:]
-        return GluonDataSet(data_train,label_train), GluonDataSet(data_test,label_test)
