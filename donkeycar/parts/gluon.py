@@ -17,7 +17,7 @@ class GluonPilot:
         if os.path.isdir(path):
             p, folder_name = os.path.split(path)
             path += '/' + folder_name + '-0000.params'
-            self.net.load_params(path, self.ctx)
+            self.net.load_parameters(path, self.ctx)
             print('Sucessfully loaded ', folder_name)
         else:
             print('Folder not found.')
@@ -110,10 +110,10 @@ class GluonLinear(GluonPilot):
 
     def run(self, img_arr):
         start = time.time()
-        img_arr = nd.array(img_arr).expand_dims(axis=0).transpose(axes=(0, 3, 1, 2))
+        img_arr = nd.array(img_arr)
+        img_arr = nd.transpose(img_arr, axes=(2, 0, 1))
+        img_arr = nd.expand_dims(img_arr, 0)
         output = self.predict(img_arr)
-        # print('throttle', throttle)
-        # angle_certainty = max(angle_binned[0])
         self.elapsed += time.time() - start
         self.run_count += 1
         if self.run_count % 100 == 99:

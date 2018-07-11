@@ -9,7 +9,8 @@ with open("README.md", "r") as fh:
 
 setup(name='donkeycar',
       version='2.5.1',
-      description='Self driving library for python.',
+      description='Self driving library for python, adjusted from the original DonkeyCar repo: '
+                  'https://github.com/wroscoe/donkey',
       long_description=long_description,
       long_description_content_type="text/markdown",
       url='https://github.com/vlamai/donkey',
@@ -36,7 +37,7 @@ setup(name='donkeycar',
                         ],
 
       extras_require={
-                      'mx': ['mxnet==1.2.0']
+                      'mx': ['mxnet==1.2.0'],
                       'tf': ['tensorflow>=1.7.0'],
                       'tf_gpu': ['tensorflow-gpu>=1.7.0'],
                       'pi': [
