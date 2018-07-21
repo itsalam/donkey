@@ -9,14 +9,15 @@ with open("README.md", "r") as fh:
 
 setup(name='donkeycar',
       version='2.5.1',
-      description='Self driving library for python.',
+      description='Self driving library for python, adjusted from the original DonkeyCar repo: '
+                  'https://github.com/wroscoe/donkey',
       long_description=long_description,
       long_description_content_type="text/markdown",
-      url='https://github.com/wroscoe/donkey',
-      download_url='https://github.com/wroscoe/donkey/archive/2.1.5.tar.gz',
-      author='Will Roscoe',
-      author_email='wroscoe@gmail.com',
-      license='MIT',
+      url='https://github.com/vlamai/donkey',
+      download_url='https://github.com/vlamai/donkey/archive/2.1.5.tar.gz',
+      author='Vincent Lam',
+      author_email='vincentthanhlam@gmail.com',
+      license='SFU',
       entry_points={
           'console_scripts': [
               'donkey=donkeycar.management.base:execute_from_command_line',
@@ -36,6 +37,7 @@ setup(name='donkeycar',
                         ],
 
       extras_require={
+                      'mx': ['mxnet==1.2.0'],
                       'tf': ['tensorflow>=1.7.0'],
                       'tf_gpu': ['tensorflow-gpu>=1.7.0'],
                       'pi': [
