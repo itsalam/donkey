@@ -36,7 +36,7 @@ setup(name='donkeycar',
                         ],
 
       extras_require={
-                      'mx': ['mxnet==1.2.0']
+                      'mx': ['mxnet==1.2.0'],
                       'tf': ['tensorflow>=1.7.0'],
                       'tf_gpu': ['tensorflow-gpu>=1.7.0'],
                       'pi': [
