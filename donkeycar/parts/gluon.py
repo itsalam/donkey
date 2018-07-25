@@ -7,7 +7,9 @@ import re
 import time
 import numpy as np
 import mxnet as mx
-from mxnet import nd, autograd, gluon
+from mxnet import nd, sym, autograd, gluon
+from mxnet.ndarray import NDArray
+from mxnet.symbol import Symbol
 
 from datetime import datetime
 
@@ -19,7 +21,7 @@ class GluonPilot:
         self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
         self.net = None
         self.throttle_output = False
-        self.accuracy_threshold = .1
+        self.accuracy_threshold = .15
 
     def compile_model(self, loss=None, optimizer='sgd', learning_rate=1e-3, init_magnitude=1):
         """
@@ -70,22 +72,6 @@ class GluonPilot:
         output = self.net(img_arr).asnumpy()
         return output[0]
 
-    def format_gen_data(self, data, label):
-        """
-        Formats the Data Generator's Numpy data and label into ND arrays and adjusts the layout
-        to feed through the NN optimally.
-        :param data: A Numpy array of the form (1, Batch_size, Height, Width, Channel)
-        :param label: A Numpy array of the form (Outputs, Batch_size)
-        :return: The data and label in ND Array format, with data being the form (BCHW) and the label (Batch_size, Output)
-        """
-
-        data = data[0]
-        data = np.transpose(data, axes=(0, 3, 1, 2))
-        data = nd.array(data, self.ctx)
-        label = nd.array(label, self.ctx)
-        label = label.swapaxes(0, 1)
-        return data, label
-
     def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
         """
         Trains a Neural Network, and saves the results.
@@ -116,19 +102,37 @@ class GluonPilot:
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
             test_accuracy = self.evalulate_accuracy(train_gen, test_steps)
             train_accuracy = self.evalulate_accuracy(val_gen, test_steps)
-            print("Epoch %s. Loss: %.4f, Train_acc: angle=%.4f throttle=%.4f, "
+            print("Epoch %s, Loss: %.8f, Train_acc: angle=%.4f throttle=%.4f, "
                   "Test_acc: angle=%.4f throttle=%.4f Epoch Retries: %s" % (
                       epoch_index, moving_loss,
                       train_accuracy[0], train_accuracy[1],
                       test_accuracy[0], test_accuracy[1],
                       epoch_retries))
-            if old_loss < moving_loss:
+            if old_loss <= moving_loss:
                 epoch_retries += 1
-                if epoch_retries > 5:
+                if epoch_retries > 8:
                     break
+            else:
+                epoch_retries = 0
             old_loss = moving_loss
 
         self.save(saved_model_path)
+
+    def format_gen_data(self, data, label):
+        """
+        Formats the Data Generator's Numpy data and label into ND arrays and adjusts the layout
+        to feed through the NN optimally.
+        :param data: A Numpy array of the form (1, Batch_size, Height, Width, Channel)
+        :param label: A Numpy array of the form (Outputs, Batch_size)
+        :return: The data and label in ND Array format, with data being the form (BCHW) and the label (Batch_size, Output)
+        """
+
+        data = data[0]
+        data = np.transpose(data, axes=(0, 3, 1, 2))
+        data = nd.array(data, self.ctx)
+        label = nd.array(label, self.ctx)
+        label = label.swapaxes(0, 1)
+        return data, label
 
     def load(self, path):
         """
@@ -138,8 +142,10 @@ class GluonPilot:
         """
         if os.path.isdir(path):
             p, folder_name = os.path.split(path)
-            path += '/' + folder_name + '-0000.params'
-            self.net.load_params(path, self.ctx)
+            sym_path = path + '/' + folder_name + '-symbol.json'
+            param_path = path + '/' + folder_name
+            # self.net.base = gluon.nn.SymbolBlock(outputs= mx.sym.load_json(sym_path), inputs=mx.sym.var('data'))
+            self.net.load_params(param_path, self.ctx)
             print('Sucessfully loaded ', folder_name)
         else:
             print('Folder not found.')
@@ -168,7 +174,7 @@ class GluonPilot:
 
         print("New folder made at: ", path)
         os.makedirs(path)
-        self.net.export(path + '/' + os.path.basename(path))
+        self.net.save_params(path + '/' + os.path.basename(path))
 
 
 class GluonLinear(GluonPilot):
@@ -192,31 +198,49 @@ class GluonLinear(GluonPilot):
         :param img_arr: The numpy array of the image in the format (Height, Width, Channel)
         :return: Angle and throttle as floats
         """
-        start = time.time()
+        # start = time.time()
 
         img_arr = np.transpose(img_arr, axes=(2, 0, 1))
         img_arr = np.expand_dims(img_arr, axis=0)
-        img_arr = nd.array(img_arr)
+        img_arr = nd.array(img_arr, self.ctx)
 
         output = self.predict(img_arr)
-
-        self.elapsed += time.time() - start
-        self.run_count += 1
-        if self.run_count % 100 == 99:
-            print(self.elapsed / self.run_count)
+        #
+        # self.elapsed += time.time() - start
+        # self.run_count += 1
+        # if self.run_count % 100 == 99:
+        #     print(self.elapsed / self.run_count)
         return output[0], output[1]
 
 
-class ClippedNN(gluon.nn.HybridSequential):
-    """
-    A Gluon Hybrid Block that clips the output from -1 to 1 to reflect the output range.
-    """
+class ClippedOutput(gluon.HybridBlock):
     def __init__(self):
-        super(ClippedNN, self).__init__('')
+        super(ClippedOutput, self).__init__()
+        with self.name_scope():
+            self.base = gluon.nn.HybridSequential()
+            with self.base.name_scope():
+                self.base.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
+
+                self.base.add(gluon.nn.Flatten())
+                self.base.add(gluon.nn.Dense(100))
+                self.base.add(gluon.nn.Dropout(.1))
+                self.base.add(gluon.nn.Dense(50))
+                self.base.add(gluon.nn.Dropout(.1))
+                self.base.add(gluon.nn.Dense(2))
 
     def hybrid_forward(self, F, x):
-        x = super().hybrid_forward(F, x)
-        return F.clip(x, -1, 1)
+        """
+
+        :param nd or sym F:
+        :param NDArray or Symbol x:
+        :return:
+        """
+        clip_out = F.clip(self.base(x), -1.0, 1.0)
+        return clip_out
 
 
 def default_linear():
@@ -224,21 +248,6 @@ def default_linear():
     The default linear NN parameters.
     :return:
     """
-    net = ClippedNN()
-    with net.name_scope():
-        net.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
-
-        net.add(gluon.nn.Flatten())
-        net.add(gluon.nn.Dense(100, activation='relu'))
-        net.add(gluon.nn.Dropout(.1))
-        net.add(gluon.nn.Dense(50, activation='relu'))
-        net.add(gluon.nn.Dropout(.1))
-
-        net.add(gluon.nn.Dense(2))
-
+    net = ClippedOutput()
     net.hybridize()
     return net
