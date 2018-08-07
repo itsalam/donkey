@@ -4,28 +4,31 @@ A Gluon variation for the NN back-end for the DonkeyCar. Requires MxNet to be In
 
 import os.path
 import re
-import time
-import numpy as np
+
 import mxnet as mx
+import numpy as np
 from mxnet import nd, sym, autograd, gluon
 from mxnet.ndarray import NDArray
 from mxnet.symbol import Symbol
-from abc import abstractmethod
-
-from datetime import datetime
 
 
 class GluonPilot:
     """
     Base Pilot class to handle the Network feed and training
     """
+
     def __init__(self):
         self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
         self.net = None
         self.accuracy_threshold = .15
         self.angle_classes = 1
+        # self.mean_rgb = np.array([[126.504562], [106.227355], [76.436961]])
+        # self.std_rgb = np.array([[59.213406], [53.068041], [57.518464]])
 
-    def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
+    def train(self, train_gen, val_gen, saved_model_path, epochs=20, steps=100, train_split=0.8):
+
+
+
         """
         Trains a Neural Network, and saves the results.
         :param train_gen: The training data generator. Yields Numpy arrays with the data and label.
@@ -46,14 +49,15 @@ class GluonPilot:
                 with autograd.record(train_mode=True):
                     output = self.net(data)
                     loss = self.loss(output, label)
-                loss.backward()
+                    loss.backward()
                 self.optimizer.step(data.shape[0])
 
-                current_loss = nd.mean(loss).asscalar()
+                current_loss = nd.mean(loss)
                 moving_loss = (current_loss if ((steps == 0) and (epoch_index == 0))
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
-            test_accuracy = self.evalulate_accuracy(train_gen, test_steps)
-            train_accuracy = self.evalulate_accuracy(val_gen, test_steps)
+            moving_loss = moving_loss.asscalar() if not isinstance(moving_loss, np.float32) else moving_loss
+            test_accuracy = self.evalulate_accuracy(val_gen, test_steps)
+            train_accuracy = self.evalulate_accuracy(train_gen, test_steps)
             print("Epoch %s, Loss: %.8f, Train_acc: angle=%.4f throttle=%.4f, "
                   "Test_acc: angle=%.4f throttle=%.4f Epoch Retries: %s" % (
                       epoch_index, moving_loss,
@@ -80,8 +84,14 @@ class GluonPilot:
         :return: None
         """
         self.net.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+        # self.net.angle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+        # self.net.throttle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+
         self.loss = gluon.loss.L2Loss() if loss is None else loss
-        self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer, {'learning_rate': learning_rate})
+        self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer,
+                                          {'learning_rate': learning_rate
+                                              # , 'wd': 0.001
+                                           })
 
     def evalulate_accuracy(self, data_generator, steps):
         """
@@ -129,6 +139,7 @@ class GluonPilot:
         data = data[0]
         data = np.transpose(data, axes=(0, 3, 1, 2))
         data = nd.array(data, self.ctx)
+
         label = nd.array(label, self.ctx)
         if num_classes > 1:
             for i, angle in enumerate(label[0]):
@@ -177,17 +188,24 @@ class GluonPilot:
         os.makedirs(path)
         self.net.save_params(path + '/' + os.path.basename(path))
 
+    def format_img_arr(self, img_arr):
+        img_arr = img_arr.astype('float32') - self.mean_rgb.transpose()
+        img_arr /= self.std_rgb.transpose()
+        img_arr = np.transpose(img_arr, axes=(2, 0, 1))
+        img_arr = np.expand_dims(img_arr, axis=0)
+        img_arr = nd.array(img_arr, self.ctx)
+        return img_arr
+
 
 class GluonLinear(GluonPilot):
     def __init__(self):
-        super(GluonHybrid, self).__init__()
+        super(GluonLinear, self).__init__()
         self.net = LinearOutput()
-        self.net.hybridize()
+        # self.net.hybridize()
         self.compile_model(loss=gluon.loss.L2Loss())
 
     def run(self, img_arr):
-
-        img_arr = format_img_arr(img_arr, self.ctx)
+        img_arr = self.format_img_arr(img_arr)
         output = self.predict(img_arr)
         return output[0], output[1]
 
@@ -196,17 +214,17 @@ class GluonHybrid(GluonPilot):
     """
     A GluonPilot implementation with a Network with a categorical output for angle and linear output for throttle
     """
+
     def __init__(self, num_classes=15):
         """
         Instantiates network through default_linear() and other objects with complile_model()
-        :param net: Network to apply (optional) will use the default linear net otherwise.
+        :param int num_classes: Number of angular outputs classes to divide the reuslt to
         """
         super(GluonHybrid, self).__init__()
         self.angle_classes = num_classes
         self.net = CategoricalOutput(num_classes)
-        self.net.hybridize()
-        self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight = .9)
-        self.L1_loss = gluon.loss.L1Loss(weight = .01)
+        self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=.9)
+        self.L1_loss = gluon.loss.L1Loss(weight=.1)
         self.compile_model(loss=self.hybrid_loss, optimizer='adam')
 
     def run(self, img_arr):
@@ -215,19 +233,21 @@ class GluonHybrid(GluonPilot):
         :param img_arr: The numpy array of the image in the format (Height, Width, Channel)
         :return: Angle and throttle as floats
         """
-        img_arr = format_img_arr(img_arr, self.ctx)
+        img_arr = self.format_img_arr(img_arr)
 
         output = self.predict(img_arr)
         output[0] = linear_unbin(output[0], self.angle_classes)
         return output[0], output[1][0].asscalar()
 
     def hybrid_loss(self, output, label):
-        return self.softmax_loss(output[0], label[0]).mean() + 0.1*self.L1_loss(output[1], label[1]).mean()
+        softmax_loss = self.softmax_loss(output[0], label[0])
+        l1_loss = self.L1_loss(output[1], label[1])
+        return softmax_loss + l1_loss
 
 
 class LinearOutput(gluon.HybridBlock):
     def __init__(self):
-        super(CategoricalOutput, self).__init__()
+        super(LinearOutput, self).__init__()
         with self.name_scope():
             self.base = gluon.nn.HybridSequential()
             with self.base.name_scope():
@@ -239,9 +259,9 @@ class LinearOutput(gluon.HybridBlock):
 
                 self.base.add(gluon.nn.Flatten())
                 self.base.add(gluon.nn.Dense(100))
-                self.base.add(gluon.nn.Dropout(.1))
+                self.base.add(gluon.nn.Dropout(.50))
                 self.base.add(gluon.nn.Dense(50))
-                self.base.add(gluon.nn.Dropout(.1))
+                self.base.add(gluon.nn.Dropout(.25))
             self.angle_output = gluon.nn.Dense(1)
             self.throttle_output = gluon.nn.Dense(1)
 
@@ -276,9 +296,12 @@ class CategoricalOutput(gluon.HybridBlock):
                 self.base.add(gluon.nn.Dropout(.1))
                 self.base.add(gluon.nn.Dense(50, activation='relu'))
                 self.base.add(gluon.nn.Dropout(.1))
+
+            # self.base = gluon.model_zoo.vision.resnet18_v2(pretrained=True, ctx=mx.gpu()).features
+
             self.angle_output = gluon.nn.Dense(self.angle_classes)
             self.throttle_output = gluon.nn.Dense(1, activation='relu')
-
+        self.hybridize()
     def hybrid_forward(self, F, x, *args, **kwargs):
         """
 
@@ -288,23 +311,17 @@ class CategoricalOutput(gluon.HybridBlock):
         """
         x = self.base(x)
 
-        return self.angle_output(x), self.throttle_output(x)
-
-
-def format_img_arr(img_arr, ctx):
-    img_arr = np.transpose(img_arr, axes=(2, 0, 1))
-    img_arr = np.expand_dims(img_arr, axis=0)
-    return nd.array(img_arr, ctx)
+        return [self.angle_output(x), self.throttle_output(x)]
 
 
 def linear_bin(angle, num_classes):
     angle = angle + 1
-    classfier = 2./(num_classes-1)
-    b = round(angle / classfier)
+    classifier = 2. / (num_classes - 1)
+    b = round(angle / classifier)
     return int(b)
 
 
 def linear_unbin(b, num_classes):
     b = nd.argmax(b, axis=1).asscalar()
-    a = b * (2./(num_classes-1)) - 1
+    a = b * (2. / (num_classes - 1)) - 1
     return a
