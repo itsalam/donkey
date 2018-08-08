@@ -23,6 +23,8 @@ class GluonPilot:
         self.net = None
         self.accuracy_threshold = .15
         self.angle_classes = 1
+        # self.mean_rgb = np.array([[126.504562], [106.227355], [76.436961]])
+        # self.std_rgb = np.array([[59.213406], [53.068041], [57.518464]])
 
     def train(self, train_gen, val_gen, saved_model_path, epochs=50, steps=100, train_split=0.8):
 
@@ -48,7 +50,7 @@ class GluonPilot:
                 with autograd.record(train_mode=True):
                     output = self.net(data)
                     loss = self.loss(output, label)
-                    loss.backward()
+                loss.backward()
                 self.optimizer.step(data.shape[0])
 
                 current_loss = nd.mean(loss)
@@ -83,6 +85,9 @@ class GluonPilot:
         :return: None
         """
         self.net.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+        # self.net.angle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+        # self.net.throttle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
+
         self.loss = gluon.loss.L2Loss() if loss is None else loss
         self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer,
                                           {'learning_rate': learning_rate
@@ -205,7 +210,7 @@ class GluonHybrid(GluonPilot):
         self.angle_classes = num_classes
         self.net = CategoricalOutput(num_classes)
         self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=.9)
-        self.L1_loss = gluon.loss.L1Loss(weight=.1)
+        self.L1_loss = gluon.loss.L1Loss(weight=.01)
         self.compile_model(loss=self.hybrid_loss, optimizer='adam')
 
     def run(self, img_arr):
@@ -217,7 +222,7 @@ class GluonHybrid(GluonPilot):
         img_arr = self.format_img_arr(img_arr)
 
         output = self.predict(img_arr)
-        angle_output = linear_unbin(output[0].asnumpy())
+        angle_output = linear_unbin(output[0][0].asnumpy())
         return angle_output, output[1][0].asscalar()
 
     def hybrid_loss(self, output, label):
