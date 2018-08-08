@@ -10,10 +10,33 @@ from tensorflow.python.keras.layers import Input
 from tensorflow.python.keras.models import Model, load_model
 from tensorflow.python.keras.layers import Convolution2D
 from tensorflow.python.keras.layers import Dropout, Flatten, Dense, Cropping2D, Lambda
-from tensorflow.python.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.python.keras.callbacks import ModelCheckpoint, EarlyStopping, Callback
+from tensorflow.python.keras.metrics import mean_absolute_error as mae, categorical_accuracy as cat_acc
+
+
 
 from donkeycar import util
 
+import numpy as np
+
+# class Metrics(Callback):
+#     def on_train_begin(self, logs={}):
+#         self.val_f1s = []
+#         self.val_recalls = []
+#         self.val_precisions = []
+#
+#
+#     def on_epoch_end(self, epoch, logs={}):
+#         val_predict = (np.asarray(self.model.predict(self.model.validation_data[0]))).round()
+#         val_targ = self.model.validation_data[1]
+#         _val_f1 = f1_score(val_targ, val_predict)
+#         _val_recall = recall_score(val_targ, val_predict)
+#         _val_precision = precision_score(val_targ, val_predict)
+#         self.val_f1s.append(_val_f1)
+#         self.val_recalls.append(_val_recall)
+#         self.val_precisions.append(_val_precision)
+#         print “ — val_f1: % f — val_precision: % f — val_recall % f” % (_val_f1, _val_precision, _val_recall)
+#         return
 
 class KerasPilot:
 
@@ -128,7 +151,8 @@ def default_categorical():
     model.compile(optimizer='adam',
                   loss={'angle_out': 'categorical_crossentropy',
                         'throttle_out': 'mean_absolute_error'},
-                  loss_weights={'angle_out': 0.9, 'throttle_out': .01})
+                  loss_weights={'angle_out': 0.9, 'throttle_out': .01},
+                  metrics=[cat_acc, mae])
 
     return model
 

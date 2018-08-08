@@ -33,7 +33,7 @@ setup(name='mxnet-donkeycar',
                         'flask',
                         'eventlet',
                         'moviepy',
-                        'pandas',
+                        'pandas'
                         ],
 
       extras_require={

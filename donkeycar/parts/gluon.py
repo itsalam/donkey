@@ -10,6 +10,7 @@ import numpy as np
 from mxnet import nd, sym, autograd, gluon
 from mxnet.ndarray import NDArray
 from mxnet.symbol import Symbol
+from donkeycar.util.data import linear_bin, linear_unbin
 
 
 class GluonPilot:
@@ -22,10 +23,8 @@ class GluonPilot:
         self.net = None
         self.accuracy_threshold = .15
         self.angle_classes = 1
-        # self.mean_rgb = np.array([[126.504562], [106.227355], [76.436961]])
-        # self.std_rgb = np.array([[59.213406], [53.068041], [57.518464]])
 
-    def train(self, train_gen, val_gen, saved_model_path, epochs=20, steps=100, train_split=0.8):
+    def train(self, train_gen, val_gen, saved_model_path, epochs=50, steps=100, train_split=0.8):
 
 
 
@@ -84,9 +83,6 @@ class GluonPilot:
         :return: None
         """
         self.net.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
-        # self.net.angle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
-        # self.net.throttle_output.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
-
         self.loss = gluon.loss.L2Loss() if loss is None else loss
         self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer,
                                           {'learning_rate': learning_rate
@@ -143,7 +139,7 @@ class GluonPilot:
         label = nd.array(label, self.ctx)
         if num_classes > 1:
             for i, angle in enumerate(label[0]):
-                label[0][i] = linear_bin(angle.asscalar(), num_classes)
+                label[0][i] = np.argmax(linear_bin(angle.asscalar()))
         return data, label
 
     def load(self, path):
@@ -189,25 +185,10 @@ class GluonPilot:
         self.net.save_params(path + '/' + os.path.basename(path))
 
     def format_img_arr(self, img_arr):
-        img_arr = img_arr.astype('float32') - self.mean_rgb.transpose()
-        img_arr /= self.std_rgb.transpose()
         img_arr = np.transpose(img_arr, axes=(2, 0, 1))
         img_arr = np.expand_dims(img_arr, axis=0)
         img_arr = nd.array(img_arr, self.ctx)
         return img_arr
-
-
-class GluonLinear(GluonPilot):
-    def __init__(self):
-        super(GluonLinear, self).__init__()
-        self.net = LinearOutput()
-        # self.net.hybridize()
-        self.compile_model(loss=gluon.loss.L2Loss())
-
-    def run(self, img_arr):
-        img_arr = self.format_img_arr(img_arr)
-        output = self.predict(img_arr)
-        return output[0], output[1]
 
 
 class GluonHybrid(GluonPilot):
@@ -236,46 +217,13 @@ class GluonHybrid(GluonPilot):
         img_arr = self.format_img_arr(img_arr)
 
         output = self.predict(img_arr)
-        output[0] = linear_unbin(output[0], self.angle_classes)
-        return output[0], output[1][0].asscalar()
+        angle_output = linear_unbin(output[0].asnumpy())
+        return angle_output, output[1][0].asscalar()
 
     def hybrid_loss(self, output, label):
         softmax_loss = self.softmax_loss(output[0], label[0])
         l1_loss = self.L1_loss(output[1], label[1])
         return softmax_loss + l1_loss
-
-
-class LinearOutput(gluon.HybridBlock):
-    def __init__(self):
-        super(LinearOutput, self).__init__()
-        with self.name_scope():
-            self.base = gluon.nn.HybridSequential()
-            with self.base.name_scope():
-                self.base.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
-                self.base.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
-                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
-                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
-                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
-
-                self.base.add(gluon.nn.Flatten())
-                self.base.add(gluon.nn.Dense(100))
-                self.base.add(gluon.nn.Dropout(.50))
-                self.base.add(gluon.nn.Dense(50))
-                self.base.add(gluon.nn.Dropout(.25))
-            self.angle_output = gluon.nn.Dense(1)
-            self.throttle_output = gluon.nn.Dense(1)
-
-    def hybrid_forward(self, F, x, *args, **kwargs):
-        """
-
-        :param nd or sym F:
-        :param NDArray or Symbol x:
-        :return:
-        """
-        x = self.base(x)
-        angle_output = F.clip(self.angle_output(x), -1, 1)
-        throttle_output = F.clip(self.angle_output(x), 0, 1)
-        return angle_output, throttle_output
 
 
 class CategoricalOutput(gluon.HybridBlock):
@@ -302,6 +250,7 @@ class CategoricalOutput(gluon.HybridBlock):
             self.angle_output = gluon.nn.Dense(self.angle_classes)
             self.throttle_output = gluon.nn.Dense(1, activation='relu')
         self.hybridize()
+        
     def hybrid_forward(self, F, x, *args, **kwargs):
         """
 
@@ -314,14 +263,3 @@ class CategoricalOutput(gluon.HybridBlock):
         return [self.angle_output(x), self.throttle_output(x)]
 
 
-def linear_bin(angle, num_classes):
-    angle = angle + 1
-    classifier = 2. / (num_classes - 1)
-    b = round(angle / classifier)
-    return int(b)
-
-
-def linear_unbin(b, num_classes):
-    b = nd.argmax(b, axis=1).asscalar()
-    a = b * (2. / (num_classes - 1)) - 1
-    return a
