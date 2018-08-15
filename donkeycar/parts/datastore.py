@@ -251,7 +251,7 @@ class Tub(object):
                 try:
                     img = Image.open(newval)
                 except FileNotFoundError:
-                img = Image.open(val)
+                    img = Image.open(val)
                 val = np.array(img)
 
             data[key] = val
