@@ -4,89 +4,90 @@ A Gluon variation for the NN back-end for the DonkeyCar. Requires MxNet to be In
 
 import os.path
 import re
-import time
-import numpy as np
+
 import mxnet as mx
-from mxnet import nd, autograd, gluon
+import numpy as np
+from mxnet import nd, sym, autograd, gluon
+from mxnet.ndarray import NDArray
+from mxnet.symbol import Symbol
+from donkeycar.util.data import linear_bin, linear_unbin
 
-from datetime import datetime
 
-class GluonPilot:
+class GluonPilot(gluon.nn.HybridBlock):
     """
-    Base Pilot class to handle the Network feed and training
+    A Pilot that runs a Neural Network with a categorical output for angle and linear output for throttle
     """
-    def __init__(self):
+    def __init__(self, loss=None):
+        super(GluonPilot, self).__init__()
         self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
-        self.net = None
-        self.throttle_output = False
         self.accuracy_threshold = .1
+        self.test_acc_threshold = .005
+        self.epoch_retries = 5
+        self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=.9)
+        self.L1_loss = gluon.loss.L1Loss(weight=.01)
+        self.create_model()
+        self.compile_model(loss=loss)
 
-    def compile_model(self, loss=None, optimizer='sgd', learning_rate=1e-3, init_magnitude=1):
+    def create_output(self):
+        self.angle_output = gluon.nn.Dense(15)
+        self.throttle_output = gluon.nn.Dense(1, activation='relu')
+
+    def create_model(self):
+        with self.name_scope():
+            self.base = gluon.nn.HybridSequential()
+            with self.base.name_scope():
+                self.base.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
+                self.base.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
+
+                self.base.add(gluon.nn.Flatten())
+                self.base.add(gluon.nn.Dense(100, activation='relu'))
+                self.base.add(gluon.nn.Dropout(.1))
+                self.base.add(gluon.nn.Dense(50, activation='relu'))
+                self.base.add(gluon.nn.Dropout(.1))
+            self.create_output()
+
+    def compile_model(self, loss=None, optimizer='adam', learning_rate=1e-3):
         """
         Initializes the net and instantiates the loss and optimization parameters
         :param loss: The gluon.loss.Loss() class to instantiates
         :param optimizer: A String to define the optimzation
         :param learning_rate: A float to set the Trainer's learning rate
-        :param init_magnitude: Scale of variance for initial weights
         :return: None
         """
-        self.net.collect_params().initialize(mx.init.Xavier(magnitude=init_magnitude), ctx=self.ctx)
-        self.loss = gluon.loss.L2Loss() if loss is None else loss
-        self.optimizer = mx.gluon.Trainer(self.net.collect_params(), optimizer, {'learning_rate': learning_rate})
+        self.collect_params().initialize(mx.init.Uniform(), ctx=self.ctx)
+        self.loss = self.hybrid_loss if loss is None else loss
+        self.optimizer = mx.gluon.Trainer(self.collect_params(), optimizer,
+                                          {'learning_rate': learning_rate,
+                                           'wd': 0.001
+                                           })
+        self.hybridize()
 
-    def evalulate_accuracy(self, data_generator, steps):
+    def hybrid_loss(self, output, label):
         """
-        Evaluates the net's output to actual label. Compares the predicted output to the actual output.
-        If the absolute difference exceeds self.accuracy_threshold, the prediction is considered inaccurate.
-        Returns the percentages of outputs that are considered accurate for steering and throttle predictions.
-        :param data_generator: The dataset generator, iterates data and its label shuffled in batch sizes of 128.
-        :param steps: The number of times to iterate through the generator.
-        :return: Two floats representing the accuracy of the steering angle and throttle.
+        The loss function in the form of two loss function for separate values. Output and Label index 0
+        is the classification output for angle, index 1 is regression for throttle.
+        :param NDArray output: The predicted values
+        :param NDArray label: The label values
+        :return gluon.loss.Loss: Computed loss object
         """
-        angle_acc = 0
-        throttle_acc = 0
-        data_count = 0
+        softmax_loss = self.softmax_loss(output[0], label[0])
+        l1_loss = self.L1_loss(output[1], label[1])
+        return softmax_loss + l1_loss
 
-        for i, (data, label) in zip(range(steps), data_generator):
-            data, label = self.format_gen_data(data, label)
-            output = self.net(data)
-            for yLabel, yPrediction in zip(label, output):
-                angle_err = (yLabel[0] - yPrediction[0]).abs().asscalar()
-                throttle_err = (yLabel[1] - yPrediction[1]).abs().asscalar()
-                angle_acc += 1 if angle_err < self.accuracy_threshold else 0
-                throttle_acc += 1 if throttle_err < self.accuracy_threshold else 0
-                data_count += 1
-
-        angle_acc /= float(data_count)
-        throttle_acc /= float(data_count)
-        return angle_acc, throttle_acc
-
-    def predict(self, img_arr):
+    def hybrid_forward(self, F, x, *args, **kwargs):
         """
-        Predicts the output given the image array input.
-        :param img_arr: The Mxnet ND image array in the format (1 x Channel x Height x Width)
-        :return: The steering angle and throttle as Numpy Array.
+        Defines the handling on the input data and the output
+        :param nd or sym F:
+        :param NDArray or Symbol x:
+        :return: List of sym
         """
-        output = self.net(img_arr).asnumpy()
-        return output[0]
+        x = self.base(x)
+        return [self.angle_output(x), self.throttle_output(x)]
 
-    def format_gen_data(self, data, label):
-        """
-        Formats the Data Generator's Numpy data and label into ND arrays and adjusts the layout
-        to feed through the NN optimally.
-        :param data: A Numpy array of the form (1, Batch_size, Height, Width, Channel)
-        :param label: A Numpy array of the form (Outputs, Batch_size)
-        :return: The data and label in ND Array format, with data being the form (BCHW) and the label (Batch_size, Output)
-        """
-
-        data = data[0]
-        data = np.transpose(data, axes=(0, 3, 1, 2))
-        data = nd.array(data, self.ctx)
-        label = nd.array(label, self.ctx)
-        label = label.swapaxes(0, 1)
-        return data, label
-
-    def train(self, train_gen, val_gen, saved_model_path, epochs=100, steps=100, train_split=0.8):
+    def train(self, train_gen, val_gen, saved_model_path, epochs=50, steps=100, train_split=0.8):
         """
         Trains a Neural Network, and saves the results.
         :param train_gen: The training data generator. Yields Numpy arrays with the data and label.
@@ -99,36 +100,100 @@ class GluonPilot:
         """
         test_steps = int(steps * (1.0 - train_split) / train_split)
         smoothing_constant = .01
-        old_loss = float('Inf')
+        old_acc = float(0)
         epoch_retries = 0
         for epoch_index in range(epochs):
             for steps, (data, label) in zip(range(steps), train_gen):
                 data, label = self.format_gen_data(data, label)
                 with autograd.record(train_mode=True):
-                    output = self.net(data)
+                    output = self(data)
                     loss = self.loss(output, label)
-
                 loss.backward()
                 self.optimizer.step(data.shape[0])
-
-                current_loss = nd.mean(loss).asscalar()
+                current_loss = nd.mean(loss)
                 moving_loss = (current_loss if ((steps == 0) and (epoch_index == 0))
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
-            test_accuracy = self.evalulate_accuracy(train_gen, test_steps)
-            train_accuracy = self.evalulate_accuracy(val_gen, test_steps)
-            print("Epoch %s. Loss: %.4f, Train_acc: angle=%.4f throttle=%.4f, "
+            moving_loss = moving_loss.asscalar()
+            test_accuracy = self.evalulate_accuracy(val_gen, test_steps)
+            train_accuracy = self.evalulate_accuracy(train_gen, test_steps)
+            if old_acc - test_accuracy[0] > self.test_acc_threshold:
+                epoch_retries += 1
+                if epoch_retries >= self.epoch_retries:
+                    break
+            old_acc = test_accuracy[0]
+            print("Epoch %s, Loss: %.8f, Train_acc: angle=%.4f throttle=%.4f, "
                   "Test_acc: angle=%.4f throttle=%.4f Epoch Retries: %s" % (
                       epoch_index, moving_loss,
                       train_accuracy[0], train_accuracy[1],
                       test_accuracy[0], test_accuracy[1],
                       epoch_retries))
-            if old_loss < moving_loss:
-                epoch_retries += 1
-                if epoch_retries > 5:
-                    break
-            old_loss = moving_loss
-
         self.save(saved_model_path)
+
+
+
+    def evalulate_accuracy(self, data_generator, steps):
+        """
+        Evaluates the net's output to actual value.
+        If the absolute difference exceeds self.accuracy_threshold, the prediction is considered inaccurate.
+        Returns the percentages of outputs that are considered accurate for steering and throttle predictions.
+        :param data_generator: The dataset generator, iterates data and its label shuffled in batch sizes of 128.
+        :param steps: The number of times to iterate through the generator.
+        :return: Two floats representing the accuracy of the steering angle and throttle.
+        """
+        acc = mx.metric.Accuracy()
+        throttle_acc = 0
+        data_count = 0
+
+        for i, (data, label) in zip(range(steps), data_generator):
+            data, label = self.format_gen_data(data, label)
+            output = self(data)
+            angle_output = nd.argmax(output[0], axis=1)
+            acc.update(angle_output, label[0])
+            for throttle__label, throttle__prediction in zip(label[1], output[1]):
+                throttle_err = (throttle__label - throttle__prediction).abs().asscalar()
+                throttle_acc += 1 if throttle_err < self.accuracy_threshold else 0
+                data_count += 1
+        throttle_acc /= float(data_count)
+        return float(acc.get()[1]), throttle_acc
+
+    def run(self, img_arr):
+        """
+        Takes in the Numpy array of the output (the image) and predicts the angle and throttle
+        :param img_arr: The numpy array of the image in the format (Height, Width, Channel)
+        :return: Angle and throttle as floats
+        """
+        img_arr = self.format_img_arr(img_arr)
+        output = self(img_arr)
+        angle_output = linear_unbin(output[0][0].asnumpy())
+        return angle_output, output[1][0].asscalar()
+
+    def format_gen_data(self, data, label):
+        """
+        Formats the Data Generator's Numpy data and label into ND arrays to feed through the NN.
+        :param numpy.array data: A Numpy array of the form (1, Batch_size, Height, Width, Channel)
+        :param numpy.array label: A Numpy array of the form (Outputs, Batch_size)
+        :return: The data and label in ND Array format, with data being the form (BCHW) and the label (Batch_size, Output)
+        """
+        data = data[0].astype('float32')
+        data = nd.array(data, self.ctx)
+        data = nd.transpose(data, axes=(0, 3, 1, 2))
+
+        label = nd.array(label, self.ctx)
+        for i, angle in enumerate(label[0]):
+            label[0][i] = np.argmax(linear_bin(angle.asscalar()))
+        return data, label
+
+    def format_img_arr(self, img_arr):
+        """
+        Formats the PyCamera's Numpy image data and into an ND array to feed through the NN.
+        :param numpy.array img_arr: A Numpy array of the form (Height, Width, Channel)
+        :return: The data and label in ND Array format, with data being the form (BCHW)
+        """
+        img_arr = img_arr.astype('float32')
+        img_arr = np.transpose(img_arr, axes=(2, 0, 1))
+        img_arr = np.expand_dims(img_arr, axis=0)
+        img_arr = nd.array(img_arr, self.ctx)
+        return img_arr
 
     def load(self, path):
         """
@@ -136,13 +201,15 @@ class GluonPilot:
         :param path: Directory to load from.
         :return: None
         """
+        print('Loading model %s..' % (path))
         if os.path.isdir(path):
             p, folder_name = os.path.split(path)
-            path += '/' + folder_name + '-0000.params'
-            self.net.load_params(path, self.ctx)
-            print('Sucessfully loaded ', folder_name)
+            param_path = path + '/' + folder_name
+            self.load_parameters(param_path, self.ctx)
+            print('\tSucessfully loaded.', folder_name)
         else:
-            print('Folder not found.')
+            print('\tFolder not found.')
+            exit(1)
 
     def save(self, path):
         """
@@ -150,8 +217,9 @@ class GluonPilot:
         :param path: Directory to create and save parameters to.
         :return: None
         """
+        print('Saving model...')
         while os.path.exists(path):
-            print("Existing folder found, creating a new one ...")
+            print("\tExisting folder found at %s, creating a new one ..." % path)
 
             path, folder_name = os.path.split(path)
             copy_num = folder_name.find('_')
@@ -166,79 +234,6 @@ class GluonPilot:
                 folder_name += "_1"
             path = path + '/' + folder_name
 
-        print("New folder made at: ", path)
+        print("\tNew folder made at: ", path)
         os.makedirs(path)
-        self.net.export(path + '/' + os.path.basename(path))
-
-
-class GluonLinear(GluonPilot):
-    """
-    A GluonPilot implementation with a Network with a linear output for throttle and angle.
-    """
-    def __init__(self, net=None):
-        """
-        Instantiates network through default_linear() and other objects with complile_model()
-        :param net: Network to apply (optional) will use the default linear net otherwise.
-        """
-        super(GluonLinear, self).__init__()
-        self.net = net if net is not None else default_linear()
-        self.compile_model()
-        self.elapsed = 0.0
-        self.run_count = 0
-
-    def run(self, img_arr):
-        """
-        Takes in the Numpy array of the output (the image) and predicts the angle and throttle
-        :param img_arr: The numpy array of the image in the format (Height, Width, Channel)
-        :return: Angle and throttle as floats
-        """
-        start = time.time()
-
-        img_arr = np.transpose(img_arr, axes=(2, 0, 1))
-        img_arr = np.expand_dims(img_arr, axis=0)
-        img_arr = nd.array(img_arr)
-
-        output = self.predict(img_arr)
-
-        self.elapsed += time.time() - start
-        self.run_count += 1
-        if self.run_count % 100 == 99:
-            print(self.elapsed / self.run_count)
-        return output[0], output[1]
-
-
-class ClippedNN(gluon.nn.HybridSequential):
-    """
-    A Gluon Hybrid Block that clips the output from -1 to 1 to reflect the output range.
-    """
-    def __init__(self):
-        super(ClippedNN, self).__init__('')
-
-    def hybrid_forward(self, F, x):
-        x = super().hybrid_forward(F, x)
-        return F.clip(x, -1, 1)
-
-
-def default_linear():
-    """
-    The default linear NN parameters.
-    :return:
-    """
-    net = ClippedNN()
-    with net.name_scope():
-        net.add(gluon.nn.Conv2D(channels=24, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=32, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=5, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(2, 2), activation='relu'))
-        net.add(gluon.nn.Conv2D(channels=64, kernel_size=3, strides=(1, 1), activation='relu'))
-
-        net.add(gluon.nn.Flatten())
-        net.add(gluon.nn.Dense(100, activation='relu'))
-        net.add(gluon.nn.Dropout(.1))
-        net.add(gluon.nn.Dense(50, activation='relu'))
-        net.add(gluon.nn.Dropout(.1))
-
-        net.add(gluon.nn.Dense(2))
-
-    net.hybridize()
-    return net
+        self.save_parameters(path + '/' + os.path.basename(path))

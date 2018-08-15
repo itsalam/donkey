@@ -86,6 +86,7 @@ class Vehicle:
             time.sleep(1)
 
             loop_count = 0
+            accumulated_time = 0
             while self.on:
                 start_time = time.time()
                 loop_count += 1
@@ -96,6 +97,9 @@ class Vehicle:
                 if max_loop_count and loop_count > max_loop_count:
                     self.on = False
 
+                accumulated_time += time.time() - start_time
+                if loop_count % 100 == 0:
+                    print('Completed Loop, time: %f' % (accumulated_time/loop_count))
                 sleep_time = 1.0 / rate_hz - (time.time() - start_time)
                 if sleep_time > 0.0:
                     time.sleep(sleep_time)

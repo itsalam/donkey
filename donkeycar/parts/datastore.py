@@ -12,6 +12,7 @@ import json
 import datetime
 import random
 import tarfile
+import re
 
 import numpy as np
 import pandas as pd
@@ -240,9 +241,17 @@ class Tub(object):
         for key, val in record_dict.items():
             typ = self.get_input_type(key)
 
-            # load objects that were saved as separate files
+            #  load objects that were saved as separate files
             if typ == 'image_array':
-                img = Image.open((val))
+                last_num = re.compile(r'(?:[/](\d*)[_])+')
+                number = last_num.search(val)
+                next_num = str(int(number.group(1)) - 1)
+                start, end = number.span(1)
+                newval = val[:max(end - len(number.group(1)), start)] + next_num + val[end:]
+                try:
+                    img = Image.open(newval)
+                except FileNotFoundError:
+                    img = Image.open(val)
                 val = np.array(img)
 
             data[key] = val

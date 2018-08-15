@@ -1,15 +1,15 @@
 from setuptools import setup, find_packages
 
 import os
-
+import subprocess
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
-setup(name='donkeycar',
+setup(name='mxnet-donkeycar',
       version='2.5.1',
-      description='Self driving library for python, adjusted from the original DonkeyCar repo: '
+      description='An Mxnet Implementation of DonkeyCar, adjusted from the original repo: '
                   'https://github.com/wroscoe/donkey',
       long_description=long_description,
       long_description_content_type="text/markdown",
@@ -17,7 +17,7 @@ setup(name='donkeycar',
       download_url='https://github.com/vlamai/donkey/archive/2.1.5.tar.gz',
       author='Vincent Lam',
       author_email='vincentthanhlam@gmail.com',
-      license='SFU',
+      license='MIT',
       entry_points={
           'console_scripts': [
               'donkey=donkeycar.management.base:execute_from_command_line',
@@ -33,11 +33,10 @@ setup(name='donkeycar',
                         'flask',
                         'eventlet',
                         'moviepy',
-                        'pandas',
+                        'pandas'
                         ],
 
       extras_require={
-                      'mx': ['mxnet==1.2.0'],
                       'tf': ['tensorflow>=1.7.0'],
                       'tf_gpu': ['tensorflow-gpu>=1.7.0'],
                       'pi': [
@@ -79,3 +78,5 @@ setup(name='donkeycar',
 
       packages=find_packages(exclude=(['tests', 'docs', 'site', 'env'])),
       )
+
+subprocess.call('/install/mxnet_install.sh')
