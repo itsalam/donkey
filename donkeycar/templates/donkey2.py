@@ -19,7 +19,7 @@ from docopt import docopt
 import donkeycar as dk
 from donkeycar.parts.camera import PiCamera
 from donkeycar.parts.transform import Lambda
-from donkeycar.parts.gluon import GluonLinear
+from donkeycar.parts.gluon import GluonPilot
 from donkeycar.parts.keras import KerasLinear
 from donkeycar.parts.actuator import PCA9685, PWMSteering, PWMThrottle
 from donkeycar.parts.datastore import TubGroup, TubWriter
@@ -27,7 +27,7 @@ from donkeycar.parts.web_controller.web import LocalWebController, JoystickContr
 from donkeycar.parts.clock import Timestamp
 
 
-def drive(cfg, model_path=None, use_joystick=False, use_chaos=False, gluon = False):
+def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
     """
     Construct a working robotic vehicle from many parts.
     Each part runs as a job in the Vehicle loop, calling either
@@ -74,7 +74,7 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False, gluon = Fal
           outputs=['run_pilot'])
 
     # Run the pilot if the mode is not user.
-    kl = GluonLinear() if gluon else KerasLinear()
+    kl = GluonPilot() if os.path.isdir(model_path) else KerasLinear()
     if model_path:
         kl.load(model_path)
 
@@ -143,7 +143,7 @@ def train(cfg, tub_names, new_model_path, base_model_path=None, gluon=False):
 
     new_model_path = os.path.expanduser(new_model_path)
 
-    kl = GluonLinear() if gluon else KerasLinear()
+    kl = GluonPilot() if gluon else KerasLinear()
 
     if base_model_path is not None:
         base_model_path = os.path.expanduser(base_model_path)
@@ -176,7 +176,7 @@ if __name__ == '__main__':
     cfg = dk.load_config()
 
     if args['drive']:
-        drive(cfg, model_path=args['--model'], use_joystick=args['--js'], use_chaos=args['--chaos'], gluon = args['--gluon'])
+        drive(cfg, model_path=args['--model'], use_joystick=args['--js'], use_chaos=args['--chaos'])
 
     elif args['train']:
         tub = args['--tub']
