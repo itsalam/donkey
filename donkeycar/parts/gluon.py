@@ -22,7 +22,7 @@ class GluonPilot(gluon.nn.HybridBlock):
         self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
         self.accuracy_threshold = .1
         self.test_acc_threshold = .005
-        self.epoch_retries = 10
+        self.epoch_retries = 5
         self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=.9)
         self.L1_loss = gluon.loss.L1Loss(weight=.01)
         self.create_model()

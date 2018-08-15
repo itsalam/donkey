@@ -243,14 +243,14 @@ class Tub(object):
 
             #  load objects that were saved as separate files
             if typ == 'image_array':
-                # last_num = re.compile(r'(?:[/](\d*)[_])+')
-                # number = last_num.search(val)
-                # next_num = str(int(number.group(1)) - 1)
-                # start, end = number.span(1)
-                # newval = val[:max(end - len(number.group(1)), start)] + next_num + val[end:]
-                # try:
-                #     img = Image.open(newval)
-                # except FileNotFoundError:
+                last_num = re.compile(r'(?:[/](\d*)[_])+')
+                number = last_num.search(val)
+                next_num = str(int(number.group(1)) - 1)
+                start, end = number.span(1)
+                newval = val[:max(end - len(number.group(1)), start)] + next_num + val[end:]
+                try:
+                    img = Image.open(newval)
+                except FileNotFoundError:
                 img = Image.open(val)
                 val = np.array(img)
 
