@@ -1,35 +1,37 @@
 """
 A Gluon variation for the NN back-end for the DonkeyCar. Requires MxNet to be Installed.
+@Author Vincent Lam - @vlamai
 """
-
-import os.path
 import re
-
+import json
+import os
 import mxnet as mx
 import numpy as np
+from PIL import Image
 from mxnet import nd, sym, autograd, gluon
 from mxnet.ndarray import NDArray
 from mxnet.symbol import Symbol
-from donkeycar.util.data import linear_bin, linear_unbin
-
+from donkeycar import util
+from multiprocessing import cpu_count
 
 class GluonPilot(gluon.nn.HybridBlock):
     """
     A Pilot that runs a Neural Network with a categorical output for angle and linear output for throttle
     """
-    def __init__(self, loss=None):
+    def __init__(self, loss=None, num_classes = 15):
         super(GluonPilot, self).__init__()
         self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
-        self.accuracy_threshold = .1
-        self.test_acc_threshold = .005
-        self.epoch_retries = 5
+        self.num_classes = num_classes
         self.softmax_loss = gluon.loss.SoftmaxCrossEntropyLoss(weight=.9)
         self.L1_loss = gluon.loss.L1Loss(weight=.01)
         self.create_model()
         self.compile_model(loss=loss)
 
+        self.throttle_acc_threshold = .1
+        self.epoch_retries = 5
+
     def create_output(self):
-        self.angle_output = gluon.nn.Dense(15)
+        self.angle_output = gluon.nn.Dense(self.num_classes)
         self.throttle_output = gluon.nn.Dense(1, activation='relu')
 
     def create_model(self):
@@ -57,7 +59,7 @@ class GluonPilot(gluon.nn.HybridBlock):
         :param learning_rate: A float to set the Trainer's learning rate
         :return: None
         """
-        self.collect_params().initialize(mx.init.Uniform(), ctx=self.ctx)
+        self.collect_params().initialize(mx.init.Uniform(.05), ctx=self.ctx)
         self.loss = self.hybrid_loss if loss is None else loss
         self.optimizer = mx.gluon.Trainer(self.collect_params(), optimizer,
                                           {'learning_rate': learning_rate,
@@ -100,10 +102,10 @@ class GluonPilot(gluon.nn.HybridBlock):
         """
         test_steps = int(steps * (1.0 - train_split) / train_split)
         smoothing_constant = .01
-        old_acc = float(0)
+        best_loss = float('inf')
         epoch_retries = 0
         for epoch_index in range(epochs):
-            for steps, (data, label) in zip(range(steps), train_gen):
+            for steps, (data, label) in enumerate(train_gen):
                 data, label = self.format_gen_data(data, label)
                 with autograd.record(train_mode=True):
                     output = self(data)
@@ -114,22 +116,20 @@ class GluonPilot(gluon.nn.HybridBlock):
                 moving_loss = (current_loss if ((steps == 0) and (epoch_index == 0))
                                else (1 - smoothing_constant) * moving_loss + (smoothing_constant * current_loss))
             moving_loss = moving_loss.asscalar()
-            test_accuracy = self.evalulate_accuracy(val_gen, test_steps)
-            train_accuracy = self.evalulate_accuracy(train_gen, test_steps)
-            if old_acc - test_accuracy[0] > self.test_acc_threshold:
+            test_angle_acc, test_throttle_acc = self.evalulate_accuracy(val_gen, test_steps)
+            train_angle_acc, train_throttle_acc = self.evalulate_accuracy(train_gen, test_steps)
+            if moving_loss > best_loss:
                 epoch_retries += 1
                 if epoch_retries >= self.epoch_retries:
                     break
-            old_acc = test_accuracy[0]
+            best_loss = moving_loss if moving_loss < best_loss else best_loss
             print("Epoch %s, Loss: %.8f, Train_acc: angle=%.4f throttle=%.4f, "
                   "Test_acc: angle=%.4f throttle=%.4f Epoch Retries: %s" % (
                       epoch_index, moving_loss,
-                      train_accuracy[0], train_accuracy[1],
-                      test_accuracy[0], test_accuracy[1],
+                      train_angle_acc, train_throttle_acc,
+                      test_angle_acc, test_throttle_acc,
                       epoch_retries))
         self.save(saved_model_path)
-
-
 
     def evalulate_accuracy(self, data_generator, steps):
         """
@@ -151,7 +151,7 @@ class GluonPilot(gluon.nn.HybridBlock):
             acc.update(angle_output, label[0])
             for throttle__label, throttle__prediction in zip(label[1], output[1]):
                 throttle_err = (throttle__label - throttle__prediction).abs().asscalar()
-                throttle_acc += 1 if throttle_err < self.accuracy_threshold else 0
+                throttle_acc += 1 if throttle_err < self.throttle_acc_threshold else 0
                 data_count += 1
         throttle_acc /= float(data_count)
         return float(acc.get()[1]), throttle_acc
@@ -162,7 +162,10 @@ class GluonPilot(gluon.nn.HybridBlock):
         :param img_arr: The numpy array of the image in the format (Height, Width, Channel)
         :return: Angle and throttle as floats
         """
-        img_arr = self.format_img_arr(img_arr)
+
+        img_arr = format_img_arr(img_arr.astype('float32'))
+        img_arr = np.expand_dims(img_arr, axis=0)
+        img_arr = nd.array(img_arr, self.ctx)
         output = self(img_arr)
         angle_output = linear_unbin(output[0][0].asnumpy())
         return angle_output, output[1][0].asscalar()
@@ -170,30 +173,15 @@ class GluonPilot(gluon.nn.HybridBlock):
     def format_gen_data(self, data, label):
         """
         Formats the Data Generator's Numpy data and label into ND arrays to feed through the NN.
-        :param numpy.array data: A Numpy array of the form (1, Batch_size, Height, Width, Channel)
-        :param numpy.array label: A Numpy array of the form (Outputs, Batch_size)
-        :return: The data and label in ND Array format, with data being the form (BCHW) and the label (Batch_size, Output)
+        :param numpy.array data: A Numpy of the shape [1(formally number of batches), Batch_size, Height, Width, Channel]
+        :param numpy.array label: A Numpy array of the shape [1, Batch_size, (Angle_label, Throttle_label)]
+        :return: The data and label in NDArray, with data being the shape (BCHW) and the label (Batch_size, Output)
         """
-        data = data[0].astype('float32')
         data = nd.array(data, self.ctx)
-        data = nd.transpose(data, axes=(0, 3, 1, 2))
-
         label = nd.array(label, self.ctx)
         for i, angle in enumerate(label[0]):
-            label[0][i] = np.argmax(linear_bin(angle.asscalar()))
-        return data, label
-
-    def format_img_arr(self, img_arr):
-        """
-        Formats the PyCamera's Numpy image data and into an ND array to feed through the NN.
-        :param numpy.array img_arr: A Numpy array of the form (Height, Width, Channel)
-        :return: The data and label in ND Array format, with data being the form (BCHW)
-        """
-        img_arr = img_arr.astype('float32')
-        img_arr = np.transpose(img_arr, axes=(2, 0, 1))
-        img_arr = np.expand_dims(img_arr, axis=0)
-        img_arr = nd.array(img_arr, self.ctx)
-        return img_arr
+            label[0][i] = np.argmax(linear_bin(angle.asscalar(), self.num_classes))
+        return data, label.transpose()
 
     def load(self, path):
         """
@@ -237,3 +225,110 @@ class GluonPilot(gluon.nn.HybridBlock):
         print("\tNew folder made at: ", path)
         os.makedirs(path)
         self.save_parameters(path + '/' + os.path.basename(path))
+
+
+class GluonRes(GluonPilot):
+    def __init__(self):
+        super(GluonRes, self).__init__()
+
+    def create_model(self):
+        with self.name_scope():
+            self.base = gluon.model_zoo.vision.resnet18_v2(pretrained=True, ctx=self.ctx).features
+            self.create_output()
+
+    def compile_model(self, loss=None, optimizer='adam', learning_rate=1e-3):
+        """
+        Initializes the net and instantiates the loss and optimization parameters
+        :param loss: The gluon.loss.Loss() class to instantiates
+        :param optimizer: A String to define the optimzation
+        :param learning_rate: A float to set the Trainer's learning rate
+        :return: None
+        """
+        self.angle_output.collect_params().initialize(mx.init.Uniform(.05), ctx=self.ctx)
+        self.throttle_output.collect_params().initialize(mx.init.Uniform(.05), ctx=self.ctx)
+        self.loss = self.hybrid_loss if loss is None else loss
+        self.optimizer = mx.gluon.Trainer(self.collect_params(), optimizer,
+                                          {'learning_rate': learning_rate,
+                                           'wd': 0.001
+                                           })
+        self.hybridize()
+
+
+def linear_bin(a, num_classes):
+    a = a + 1
+    b = a / (2 / (num_classes-1))
+    b = 0 if b < 1 else b
+    b = num_classes-1 if b > 5 else b
+    b = round(b)
+    arr = np.zeros(num_classes)
+    arr[int(b)] = 1
+    return arr
+
+def linear_unbin(arr):
+    b = np.argmax(arr)
+    a = b * (2 / (len(arr)-1)) - 1
+    return a
+
+def format_img_arr(img_arr):
+    """
+    Formats the PyCamera's Numpy image data and into an ND array to feed through the NN.
+    :param numpy.array img_arr: A Numpy array of the form (Height, Width, Channel)
+    :return: The data and label in ND Array format, with data being the form (BCHW)
+    """
+    height_crop = int(img_arr.shape[0] / 3)
+    img_arr = img_arr[height_crop:]
+    img_arr = np.transpose(img_arr, axes=(2, 0, 1))
+    return img_arr
+
+def get_train_val_sets(paths, train_split, batch_size):
+    tub_paths = util.files.expand_path_arg(paths)
+    train_json_records = []
+    test_json_records = []
+    for path in tub_paths:
+        records = [path + '/' + f for f in os.listdir(path) if 'record_' in f]
+        train_split_index = int(len(records) * train_split)
+        train_json_records += records[:train_split_index]
+        test_json_records += records[train_split_index:]
+
+    train_dataset = GluonDataSet(train_json_records)
+    test_dataset = GluonDataSet(test_json_records)
+
+    train_dataloader = gluon.data.DataLoader(train_dataset, batch_size = batch_size, shuffle=True, num_workers=cpu_count())
+    test_dataloader = gluon.data.DataLoader(test_dataset, batch_size = batch_size, num_workers=cpu_count())
+
+    return train_dataloader, test_dataloader
+
+
+class GluonDataSet(gluon.data.Dataset):
+    def __init__(self, record_list, load_in_memory=True):
+        super(GluonDataSet, self).__init__()
+        self.in_memory = load_in_memory
+        if self.in_memory:
+            self.json_records = []
+            for record in record_list:
+                self.json_records.append(self.get_record_data(record))
+        else:
+            self.json_records = record_list
+
+    def __getitem__(self, item):
+        if self.in_memory:
+            return self.json_records[item]
+        else:
+            return self.get_record_data(self.json_records[item])
+
+    def get_record_data(self, path):
+        with open(path,'r') as fp:
+            json_data = json.load(fp)
+
+        base_path, file = os.path.split(path)
+        img_path = json_data["cam/image_array"]
+        image = np.array(Image.open(base_path + '/' + img_path))
+        image = format_img_arr(image)
+        throttle = json_data["user/throttle"]
+        angle = json_data["user/angle"]
+        data = image.astype('float32')
+        label = np.array([angle, throttle]).astype('float32')
+        return data, label
+
+    def __len__(self):
+        return len(self.json_records)
