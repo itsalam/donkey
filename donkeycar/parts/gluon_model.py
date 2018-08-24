@@ -25,7 +25,7 @@ class GluonCategorical(gluon.nn.HybridBlock):
         :param int num_classes: Specifies the number of classes for the angle classification layer.
         """
         super(GluonCategorical, self).__init__()
-        self.ctx = mx.gpu()
+        self.ctx = mx.gpu() if mx.test_utils.list_gpus() else mx.cpu()
         self._num_classes = num_classes
         with self.name_scope():
             self._create_base()
