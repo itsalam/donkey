@@ -33,7 +33,7 @@ setup(name='mxnet-donkeycar',
                         'flask',
                         'eventlet',
                         'moviepy',
-                        'pandas'
+                        'pandas', 'mxnet'
                         ],
 
       extras_require={
@@ -78,5 +78,3 @@ setup(name='mxnet-donkeycar',
 
       packages=find_packages(exclude=(['tests', 'docs', 'site', 'env'])),
       )
-
-subprocess.call('/install/mxnet_install.sh')
