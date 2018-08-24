@@ -16,11 +16,11 @@ from docopt import docopt
 
 import donkeycar as dk
 
-# import parts
+#import parts
 from donkeycar.parts.camera import PiCamera
 from donkeycar.parts.transform import Lambda
 from donkeycar.parts.gluon_model import GluonCategorical
-from donkeycar.parts.gluon import GluonTrainer
+from donkeycar.parts.gluon_trainer import GluonTrainer
 from donkeycar.parts.gluon_dataset import get_train_val_sets
 from donkeycar.parts.keras import KerasCategorical
 from donkeycar.parts.actuator import PCA9685, PWMSteering, PWMThrottle
@@ -72,7 +72,7 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
 
     pilot_condition_part = Lambda(pilot_condition)
     V.add(pilot_condition_part, inputs=['user/mode'],
-          outputs=['run_pilot'])
+                                outputs=['run_pilot'])
 
     # Run the pilot if the mode is not user.
     # If the model_path param is to a folder, assume Gluon parameters
@@ -121,9 +121,9 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
     inputs = ['cam/image_array', 'user/angle', 'user/throttle', 'user/mode', 'timestamp']
     types = ['image_array', 'float', 'float', 'str', 'str']
 
-    # multiple tubs
-    # th = TubHandler(path=cfg.DATA_PATH)
-    # tub = th.new_tub_writer(inputs=inputs, types=types)
+    #multiple tubs
+    #th = TubHandler(path=cfg.DATA_PATH)
+    #tub = th.new_tub_writer(inputs=inputs, types=types)
 
     # single tub
     tub = TubWriter(path=cfg.TUB_PATH, inputs=inputs, types=types)
@@ -134,6 +134,8 @@ def drive(cfg, model_path=None, use_joystick=False, use_chaos=False):
             max_loop_count=cfg.MAX_LOOPS)
 
 
+
+
 def train(cfg, tub_names, new_model_path, base_model_path=None, gluon=False):
     """
     use the specified data in tub_names to train an artifical neural network
@@ -141,7 +143,7 @@ def train(cfg, tub_names, new_model_path, base_model_path=None, gluon=False):
     """
     X_keys = ['cam/image_array']
     y_keys = ['user/angle', 'user/throttle']
-
+    
     def train_record_transform(record):
         """ convert categorical steering to linear and apply image augmentations """
         record['user/angle'] = dk.util.data.linear_bin(record['user/angle'])

@@ -1,14 +1,11 @@
 from setuptools import setup, find_packages
 
-import os
-import subprocess
-
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
 setup(name='mxnet-donkeycar',
-      version='2.5.1',
+      version='1.1',
       description='An Mxnet Implementation of DonkeyCar, adjusted from the original repo: '
                   'https://github.com/wroscoe/donkey',
       long_description=long_description,
