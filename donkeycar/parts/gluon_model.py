@@ -162,12 +162,26 @@ class HybridLoss(gluon.loss.Loss):
     """
 
     def __init__(self, angle_loss_function, throttle_loss_function):
+        """
+        Default constructor, accepts two gluon.loss.Loss objects to be fed through.
+        :param gluon.loss.Loss angle_loss_function: The loss function for the angle class
+        :param gluon.loss.Loss throttle_loss_functionL The loss function for the throttle class
+        """
         super(HybridLoss, self).__init__(weight=None, batch_axis=0)
         with self.name_scope():
             self.throttle_loss_func = throttle_loss_function
             self.angle_loss_func = angle_loss_function
 
     def hybrid_forward(self, F, angle, throttle, angle_label, throttle_label):
+        """
+        Defines the handling on the predicted angle and throttle with the label
+        :param nd or sym F: NDarray or Sym module to preform operations with
+        :param nd angle: predicted angle classes
+        :param nd throttle: predicted throttle float
+        :param nd angle_label: actual angle class's index
+        :param nd throttle_label: actual throttle float
+        :return: Tuple of sym or nd
+        """
         angel_loss = self.angle_loss_func(angle, angle_label)
         throttle_loss = self.throttle_loss_func(throttle, throttle_label)
         return angel_loss + throttle_loss

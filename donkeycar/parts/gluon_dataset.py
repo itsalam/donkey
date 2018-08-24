@@ -53,6 +53,7 @@ def get_train_val_sets(paths, train_split, batch_size=128, flip_chance=.2, crop_
             x0 = 0 if random.random() < .5 else 80
             label[0] += 1*recover_turn if x0 is 0 else -1*recover_turn
             data = mx.image.fixed_crop(data, x0=x0, y0=0, w=80, h=120, size=(160, 120))
+        label = np.clip(label, -1, 1)
         return data, label
 
     train_dataset = GluonDataSet(train_json_records, transform=augment_img)
@@ -97,7 +98,7 @@ class GluonDataSet(gluon.data.Dataset):
         if self._transform is not None:
             record = self._transform(*record)
         data = nd.array(format_img_arr(record[0]))
-        record[1][0] = nd.argmax(linear_bin(record[1][0]))
+        record[1][0] = np.argmax(linear_bin(record[1][0]))
         return data, record[1]
 
     @staticmethod
@@ -111,9 +112,9 @@ class GluonDataSet(gluon.data.Dataset):
             json_data = json.load(fp)
         base_path, file = os.path.split(path)
         img_path = json_data["cam/image_array"]
-        last_num = re.compile(r'(?:[/](\d*)[_])+')
+        last_num = re.compile(r'(?:(\d*))+')
         number = last_num.search(img_path)
-        next_num = str(int(number.group(1)) - 1)
+        next_num = str(int(number.group(0)) - 1)
         start, end = number.span(1)
         last_img_path = img_path[:max(end - len(number.group(1)), start)] + next_num + img_path[end:]
         try:
