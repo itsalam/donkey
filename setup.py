@@ -1,21 +1,19 @@
 from setuptools import setup, find_packages
 
-import os
-
-
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
-setup(name='donkeycar',
-      version='2.5.1',
-      description='Self driving library for python.',
+setup(name='mxnet-donkeycar',
+      version='1.1',
+      description='An Mxnet Implementation of DonkeyCar, adjusted from the original repo: '
+                  'https://github.com/wroscoe/donkey',
       long_description=long_description,
       long_description_content_type="text/markdown",
-      url='https://github.com/wroscoe/donkey',
-      download_url='https://github.com/wroscoe/donkey/archive/2.1.5.tar.gz',
-      author='Will Roscoe',
-      author_email='wroscoe@gmail.com',
+      url='https://github.com/vlamai/donkey',
+      download_url='https://github.com/vlamai/donkey/archive/2.1.5.tar.gz',
+      author='Vincent Lam',
+      author_email='vincentthanhlam@gmail.com',
       license='MIT',
       entry_points={
           'console_scripts': [
@@ -32,7 +30,7 @@ setup(name='donkeycar',
                         'flask',
                         'eventlet',
                         'moviepy',
-                        'pandas',
+                        'pandas', 'mxnet'
                         ],
 
       extras_require={
